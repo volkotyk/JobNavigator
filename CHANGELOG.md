@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Posting zoom:** a + / − floater top-right of the posting steps the frame from 50 to 200 %; the level is remembered per browser. Double-click resets. Settings › General › Feed hides it.
 
 ### Changed
+- **Subscription CLIs in the backend image** (by @volkotyk): Claude Code 2.1.281, which has `--effort`, and Codex CLI 0.156.1, which knows the GPT-6 models. Both are pinned now, so a cached layer cannot keep an older version. Antigravity CLI stays at 1.2.9, which is its newest release. Its installer cannot pin a version, so the `AGY_VERSION` build argument records the version and acts as the cache key. Rebuild the image to get them: `docker compose build backend`.
 - **Page text is fenced in every prompt:** the job posting (scoring, tailoring, cover letters) and the application question (autofill) go to the model between `<<<JOB POSTING>>>` markers with a one-line notice that it is data, so a posting that carries instructions is read as a posting. Output for ordinary postings is unchanged.
 - **Frontend port 3000 is no longer published**; the dashboard is reached through Caddy on port 80 only (a host port there served nothing and could clash with ranges Windows reserves for Hyper-V).
 
