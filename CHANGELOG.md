@@ -8,6 +8,9 @@ Releases are named major.minor ("3.0"); tags before 3.0 carry a `.0` patch (`v2.
 
 ## [Unreleased]
 
+### Added
+- **Rename a résumé** (by @volkotyk): in the résumé editor, click the name in the top bar (or ⋯ › Rename) to edit it. Enter or a click outside saves, Escape cancels, and a blank name keeps the old one. Before, the name came only from the create dialog or the imported PDF file name, so two imports of the same file got the same name. The API now rejects a blank or non-string name on `PATCH /api/resumes/{id}` with 400, the same as on create. Job scores already stored under the old name keep that label; a new scoring run uses the new name.
+
 ### Fixed
 - **Antigravity CLI expired login** (by @volkotyk): `agy` 1.3.3 and later reports an expired or revoked token as "Authentication expired. Please log back in." The adapter now treats it as "not logged in": the call goes straight to the fallback provider and the error names the login command. Before, it was a plain failure that the backend retried.
 - **Antigravity CLI on -high models** (by @volkotyk): one résumé tailoring on `gemini-3.8-flash-high` took 194 to 368 s over three runs, so the 300 s CLI limit cut off answers that were on the way. Two of the three runs also tried `run_command ls` and `read_file` in the empty workdir first: the CLI offers its 60 tools whatever the deny list says, the deny list blocked the calls, and the model then thought longer. The message to `agy` now tells the agent to answer from the text and call no tool; three runs after the change made no tool call and took 86 to 300 s. Antigravity also gets a limit of its own, 450 s, which stays under Caddy's 480 s read timeout for the PDF import; Codex and Claude Code keep 300 s. The deny list and the check of `agy`'s log stay as they are. Settings › Models says that -high models can think for minutes on these jobs; -medium did the same tailoring in 13 to 39 s.
