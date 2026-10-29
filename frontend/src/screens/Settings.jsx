@@ -719,6 +719,15 @@ export default function Settings() {
           flash(data.inherited ? 'Key works — the owner’s Apify key, shared with you' : `Key works — Apify account ${data.username}`)
         }),
       ]],
+      ['behance', '', 'Behance', '', [
+        B('Session cookie', 'Lets Creative boards searches read Behance as you, so Behance Pro briefs come back in full.', 'behance_session_cookie',
+          { secret: true, mono: true, w: '340px', placeholder: 'Cookie header from behance.net',
+            info: 'Sign in at behance.net, open DevTools › Network, reload the job list, click the first request to www.behance.net and copy the value of its Cookie request header. It is stored in your database for your account only and is never sent back to the browser. Without Behance Pro the session changes nothing: Behance masks brief details and replies for every free account. When Behance signs the session out, the Behance board of your searches fails with a message until you paste a new one.' }),
+        BT('Session check', 'Shows the Behance account the session signs in as and whether it has Behance Pro. Runs no search.', 'Check session', async () => {
+          const { data } = await api.post('/settings/behance/check')
+          flash(`Signed in as ${data.username}${data.pro ? ' — Behance Pro is active' : ' — no Behance Pro: brief details stay masked'}`)
+        }),
+      ]],
       ['jobright', '', 'Jobright.ai', '', [
         B('Email', 'Your Jobright account.', 'jobright_email', { w: '260px' }),
         B('Password', 'Stored locally.', 'jobright_password', { secret: true, w: '260px' }),

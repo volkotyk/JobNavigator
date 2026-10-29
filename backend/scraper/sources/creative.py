@@ -39,6 +39,7 @@ import ssl
 import time
 import uuid
 import weakref
+from contextvars import ContextVar
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -144,8 +145,30 @@ _BEHANCE_DETAIL = """query D($oid: JobOID, $briefId: Int!, $isBrief: Boolean!) {
 }"""
 
 
-async def _behance_headers(client: httpx.AsyncClient) -> dict:
-    """Pass the cookie challenge once per client and return the GraphQL headers."""
+# The Cookie header of a signed-in behance.net page (Settings › Behance), for the account the
+# run ingests for; "" = anonymous. With a Behance Pro login the brief fields Behance masks for
+# visitors ("####": deliverables, candidate info, details, client name) come back in full.
+_BEHANCE_SESSION: ContextVar[str] = ContextVar("behance_session", default="")
+_BEHANCE_VIEWER = "query V { viewer { id username creatorPro { isActive } } }"
+
+
+def _parse_cookie_header(text: str) -> dict:
+    """"a=1; b=2" (a pasted Cookie header, with or without the "Cookie:" name) -> {"a": "1", "b": "2"}."""
+    text = (text or "").strip()
+    if text.lower().startswith("cookie:"):
+        text = text[7:]
+    pairs = (p.strip().split("=", 1) for p in text.split(";") if "=" in p)
+    return {k.strip(): v.strip() for k, v in pairs if k.strip()}
+
+
+async def _behance_headers(client: httpx.AsyncClient, session: Optional[str] = None) -> tuple:
+    """Pass the cookie challenge once per client: (GraphQL headers, viewer or None). With a
+    session, its cookies go in the jar, its own `bcp` value is the double-submit token, and
+    the session must still be signed in."""
+    session = _BEHANCE_SESSION.get() if session is None else session
+    cookies = _parse_cookie_header(session)
+    for name, value in cookies.items():
+        client.cookies.set(name, value, domain=".behance.net")
     resp = await client.get(f"{_BEHANCE}/joblist")
     m = re.search(r"js_challenge_value=([0-9a-f]+)", resp.text)
     if m:
@@ -153,14 +176,29 @@ async def _behance_headers(client: httpx.AsyncClient) -> dict:
         resp = await client.get(f"{_BEHANCE}/joblist")
     if resp.status_code >= 400:
         raise CreativeError(f"HTTP {resp.status_code}: Behance refused the job list page")
-    token = str(uuid.uuid4())
+    token = cookies.get("bcp") or str(uuid.uuid4())
     client.cookies.set("bcp", token, domain=".behance.net")
-    return {"X-BCP": token, "X-Requested-With": "XMLHttpRequest",
-            "Origin": _BEHANCE, "Referer": f"{_BEHANCE}/joblist"}
+    headers = {"X-BCP": token, "X-Requested-With": "XMLHttpRequest",
+               "Origin": _BEHANCE, "Referer": f"{_BEHANCE}/joblist"}
+    viewer = None
+    if cookies:
+        viewer = (await _gql(client, f"{_BEHANCE}/v3/graphql", _BEHANCE_VIEWER, {}, headers)).get("viewer")
+        if not viewer:
+            raise CreativeError("the Behance session in Settings › Behance is signed out or expired; "
+                                "paste a new one")
+    return headers, viewer
+
+
+async def behance_viewer(session: str) -> dict:
+    """{username, pro} of the account a pasted session signs in as (Settings › Behance › Check)."""
+    async with _client() as client:
+        _headers, viewer = await _behance_headers(client, session)
+    viewer = viewer or {}
+    return {"username": viewer.get("username"), "pro": bool((viewer.get("creatorPro") or {}).get("isActive"))}
 
 
 async def _behance_list(client: httpx.AsyncClient, search: Search, limit: int) -> list:
-    headers = await _behance_headers(client)
+    headers, _viewer = await _behance_headers(client)
     variables = {"query": _term(search), "first": _BEHANCE_PAGE}
     if search.is_remote:
         variables["filter"] = {"remoteStatus": "REMOTE"}
@@ -793,6 +831,7 @@ async def run(search: Search) -> dict:
             include_kw, exclude_kw = search_title_filters(search, db)
             global_ex, search_ex = build_search_exclude_sets(db, search)
             existing_ids = get_existing_external_ids(db)
+            _BEHANCE_SESSION.set(get_setting(db, "behance_session_cookie") or "")
             async with _client() as client:
                 rows, breakdown = await _collect(client, search, clamp_results(search.results_wanted))
 
@@ -889,6 +928,7 @@ async def preview(search: Search, db) -> dict:
     try:
         include_kw, exclude_kw = search_title_filters(search, db)
         global_ex, search_ex = build_search_exclude_sets(db, search)
+        _BEHANCE_SESSION.set(get_setting(db, "behance_session_cookie") or "")
         async with _client() as client:
             rows, breakdown = await _collect(client, search, PREVIEW_LIMIT)
             reasons = [_rejection(r, search, include_kw, exclude_kw, global_ex, search_ex) for r in rows]

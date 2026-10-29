@@ -56,6 +56,10 @@ class FakeSites:
             return httpx.Response(200, text="<html></html>")
         if host == "www.behance.net" and path == "/v3/graphql":
             v = body["variables"]
+            if body["query"].startswith("query V "):
+                signed_in = "iat0=live" in request.headers.get("cookie", "")
+                viewer = {"id": 7, "username": "veronika", "creatorPro": {"isActive": True}} if signed_in else None
+                return httpx.Response(200, json={"data": {"viewer": viewer}})
             if "combinedJobListings" in body["query"]:
                 nodes = self.behance_pages.get(v["page"], [])
                 return httpx.Response(200, json={"data": {"combinedJobListings": {
@@ -174,6 +178,42 @@ async def test_behance_details_fill_text_date_and_usd_salary_and_drop_masked_fie
     assert job["posted"] is not None and creative._too_old(job, 2) is None
     assert brief["description"] == "Draw a book\n\nTen pages"          # "####" is a masked field
     assert brief["company"] == "Brief Co" and brief["posted"] is None
+
+
+def test_parse_cookie_header_takes_a_pasted_header():
+    assert creative._parse_cookie_header("Cookie: iat0=live; bcp=abc; empty=; =x") == {"iat0": "live", "bcp": "abc", "empty": ""}
+    assert creative._parse_cookie_header("") == {}
+
+
+async def test_behance_session_cookies_go_out_with_its_own_bcp_token(sites):
+    token = creative._BEHANCE_SESSION.set("iat0=live; bcp=from-browser")
+    try:
+        async with creative._client() as c:
+            rows = await creative._behance_list(c, _search(), 10)
+    finally:
+        creative._BEHANCE_SESSION.reset(token)
+    assert rows
+    gql = sites.to("www.behance.net", "/v3/graphql")
+    assert gql[0][2]["query"].startswith("query V ")                      # signed in is checked first
+    assert all(g[3]["x-bcp"] == "from-browser" and "iat0=live" in g[3]["cookie"] for g in gql)
+
+
+async def test_a_signed_out_behance_session_fails_the_board(sites):
+    token = creative._BEHANCE_SESSION.set("iat0=expired")
+    try:
+        async with creative._client() as c:
+            rows, breakdown = await creative._collect(c, _search(sources=["behance"]), 10)
+    finally:
+        creative._BEHANCE_SESSION.reset(token)
+    assert rows == [] and "signed out or expired" in breakdown["behance"]["error"]
+
+
+async def test_behance_viewer_names_the_account_and_its_pro_status(sites, monkeypatch):
+    monkeypatch.setattr(creative, "_client", lambda: httpx.AsyncClient(transport=httpx.MockTransport(sites),
+                                                                        follow_redirects=True))
+    assert await creative.behance_viewer("iat0=live") == {"username": "veronika", "pro": True}
+    with pytest.raises(creative.CreativeError, match="signed out"):
+        await creative.behance_viewer("iat0=old")
 
 
 def test_annual_usd_refuses_other_currencies_periods_and_hourly_rates():
@@ -556,6 +596,14 @@ def api_client(api_client, test_db):
     test_db.add(Setting(key="dashboard_api_key", value=""))
     test_db.commit()
     return api_client
+
+
+def test_the_behance_session_is_redacted_and_checked_per_account(api_client, test_db):
+    assert api_client.post("/api/settings/behance/check").status_code == 400            # none set
+    assert api_client.patch("/api/settings", json={"behance_session_cookie": "iat0=live; bcp=x"}).status_code == 200
+    assert api_client.get("/api/settings").json()["behance_session_cookie"] == "••••••"
+    from backend.accounts.settings import SETTING_SECTIONS, OWN_ALWAYS
+    assert SETTING_SECTIONS["behance"]["scope"] == OWN_ALWAYS                           # never inherited
 
 
 def test_a_new_creative_search_gets_every_board_and_refuses_others(api_client):

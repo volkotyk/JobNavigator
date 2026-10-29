@@ -17,7 +17,7 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 
 _REDACT_SUFFIXES = ("_password", "_api_key", "_session_id", "_secret")
 _REDACT_KEYS = {"dashboard_api_key", "gmail_refresh_token", "claude_code_oauth_token",
-                "telegram_bot_token"}
+                "telegram_bot_token", "behance_session_cookie"}
 # Server-side only, never listed (not even redacted) and not writable (not a known key).
 _HIDDEN_KEYS = {"account_cookie_secret", "telegram_own_webhook_secret", "gmail_token_status",
                 "llm_local_seed_cleared", "llm_provider_keys_migrated", "cv_score_keys_migrated",
@@ -353,6 +353,23 @@ async def check_apify_key(db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail=f"Apify: {e}") from e
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"Apify is unreachable ({type(e).__name__})") from e
+
+
+@router.post("/behance/check")
+async def check_behance_session(db: Session = Depends(get_db)):
+    """Confirm the caller's own Behance session: the Behance username it signs in as and
+    whether that account has Behance Pro. Reads one job-list page and runs no search."""
+    import httpx
+    from backend.scraper.sources.creative import CreativeError, behance_viewer
+    session = (acct_settings.get_setting(db, "behance_session_cookie") or "").strip()
+    if not session:
+        raise HTTPException(status_code=400, detail="Behance: no session is set")
+    try:
+        return {"ok": True, **await behance_viewer(session)}
+    except CreativeError as e:
+        raise HTTPException(status_code=400, detail=f"Behance: {e}") from e
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=502, detail=f"Behance is unreachable ({type(e).__name__})") from e
 
 
 @router.get("/defaults")
